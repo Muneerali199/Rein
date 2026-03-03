@@ -9,6 +9,7 @@ import serverConfig from "./src/server-config.json"
 import { createWsServer } from "./src/server/websocket"
 
 const config = defineConfig({
+	base: "./",
 	resolve: {
 		alias: {
 			"@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -42,6 +43,11 @@ const config = defineConfig({
 		host: serverConfig.host === "0.0.0.0" ? true : serverConfig.host,
 		port: serverConfig.frontendPort,
 	},
+	build: {
+		outDir: ".output",
+		emptyOutDir: true,
+	}
+
 })
 
 export default config

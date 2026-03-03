@@ -1,0 +1,74 @@
+name: Build Electron
+
+on:
+  push:
+    branches:
+      - electron-packaging-workflow
+  pull_request:
+    paths:
+      - "src/**"
+      - "public/**"
+
+jobs:
+  build-electron:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Setup Node.js with npm cache
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      # 3️⃣ Clean node_modules and npm cache safely
+      - name: Clean node_modules and npm cache (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
+          npm cache clean --force
+        shell: pwsh
+
+      - name: Clean node_modules and npm cache (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          rm -rf node_modules package-lock.json || true
+          npm cache clean --force
+
+      # 4️⃣ Install dependencies (ensure optional native deps)
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: npm ci --include=optional
+
+      - name: Install dependencies (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: npm install --include=optional --force
+
+      # 5️⃣ Rebuild native dependencies for Electron
+      - name: Rebuild native dependencies
+        run: npx electron-builder install-app-deps
+
+      # 6️⃣ Build frontend (Vite / React)
+      - name: Build frontend
+        run: npm run build
+
+      # 7️⃣ Package Electron app (disable publish)
+      - name: Package Electron app
+        run: npm run dist -- --publish=never
+
+      # 8️⃣ Upload build artifacts per OS
+      - name: Upload Electron Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.os }}
+          path: dist/**
+          retention-days: 7
