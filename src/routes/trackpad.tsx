@@ -77,15 +77,18 @@ function TrackpadPage() {
 	}
 
 	const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-		// During composition (voice/IME), we skip real-time processing
-		if (isComposingRef.current) return
-
 		const nativeEvent = e.nativeEvent as InputEvent
 		const inputType = nativeEvent.inputType
 		const data = nativeEvent.data
 		const val = e.target.value
 
-		// Synchronous Reset: Reset the input immediately to prevent buffer accumulation
+		console.log("Input Event:", {
+			inputType,
+			data,
+			val,
+			isComposing: isComposingRef.current,
+		})
+
 		const resetInput = () => {
 			if (hiddenInputRef.current) {
 				hiddenInputRef.current.value = " "
@@ -93,47 +96,55 @@ function TrackpadPage() {
 			}
 		}
 
-		// 1. Explicit Backspace Detection
+		// 1. Backspace
 		if (inputType === "deleteContentBackward" || val.length === 0) {
 			send({ type: "key", key: "backspace" })
 			resetInput()
 			return
 		}
 
-		// 2. Explicit New Line / Enter
+		// 2. Enter
 		if (inputType === "insertLineBreak" || inputType === "insertParagraph") {
 			send({ type: "key", key: "enter" })
 			resetInput()
 			return
 		}
 
-		// 3. Handle Text Insertion
+		// 3. Text
+		// Early return only for EXPLICIT composition text that isn't finished
+		if (isComposingRef.current && inputType === "insertCompositionText") {
+			return
+		}
+
 		const textToSend = data || (val.length > 1 ? val.slice(1) : null)
 
 		if (textToSend) {
+			console.log("Sending text:", textToSend)
 			if (modifier !== "Release") {
 				handleModifier(textToSend)
 			} else {
-				// Map space character to the 'space' key command specifically
 				if (textToSend === " ") {
 					send({ type: "key", key: "space" })
 				} else {
 					send({ type: "text", text: textToSend })
 				}
 			}
+			resetInput()
 		}
-
-		resetInput()
 	}
 
 	const handleCompositionStart = () => {
+		console.log("Composition Start")
 		isComposingRef.current = true
 	}
 
-	const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+	const handleCompositionEnd = (
+		e: React.CompositionEvent<HTMLInputElement>,
+	) => {
 		isComposingRef.current = false
 		const val = (e.target as HTMLInputElement).value
-		// Extract text by removing the placeholder space if present
+		console.log("Composition End, final value:", val)
+
 		const textToSend = val.startsWith(" ") ? val.slice(1) : val
 
 		if (textToSend) {
@@ -144,7 +155,6 @@ function TrackpadPage() {
 			}
 		}
 
-		// Reset to placeholder
 		if (hiddenInputRef.current) {
 			hiddenInputRef.current.value = " "
 			hiddenInputRef.current.setSelectionRange(1, 1)
@@ -153,6 +163,7 @@ function TrackpadPage() {
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		const key = e.key.toLowerCase()
+		console.log("KeyDown:", key)
 
 		// 1. Enter key fallback
 		if (key === "enter") {
@@ -208,12 +219,11 @@ function TrackpadPage() {
 
 	const handleModifier = (key: string) => {
 		console.log(
-			`handleModifier called with key: ${key}, current modifier: ${modifier}, buffer:`,
+			`handleModifier: ${key}, modifier: ${modifier}, buffer:`,
 			buffer,
 		)
 		if (modifier === "Hold") {
 			const comboKeys = [...buffer, key]
-			console.log("Sending combo:", comboKeys)
 			sendCombo(comboKeys)
 		} else if (modifier === "Active") {
 			setBuffer((prev) => [...prev, key])
@@ -224,7 +234,6 @@ function TrackpadPage() {
 		<div className="flex flex-col h-full min-h-0 bg-base-300 overflow-hidden">
 			{/* TOUCH AREA */}
 			<div className="flex-1 min-h-0 relative flex flex-col border-b border-base-200">
-				{/* Touch Surface */}
 				<TouchArea
 					isTracking={isTracking}
 					scrollMode={scrollMode}
@@ -246,7 +255,7 @@ function TrackpadPage() {
 					onPaste={handlePaste}
 					scrollMode={scrollMode}
 					modifier={modifier}
-					buffer={buffer.join(" + ") || " "}
+					buffer={buffer.join(" + ")}
 					keyboardOpen={keyboardOpen}
 					extraKeysVisible={extraKeysVisible}
 					onToggleScroll={() => setScrollMode(!scrollMode)}
@@ -260,12 +269,12 @@ function TrackpadPage() {
 
 			<div
 				className={`shrink-0 overflow-hidden transition-all duration-300
-                ${!extraKeysVisible || keyboardOpen
-						? "max-h-0 opacity-0 pointer-events-none"
-						: "max-h-[50vh] opacity-100"
-					}`}
+                ${
+									!extraKeysVisible || keyboardOpen
+										? "max-h-0 opacity-0 pointer-events-none"
+										: "max-h-[50vh] opacity-100"
+								}`}
 			>
-				{/* Extra Keys */}
 				<ExtraKeys
 					sendKey={(k) => {
 						if (modifier !== "Release") handleModifier(k)
@@ -284,6 +293,11 @@ function TrackpadPage() {
 				onChange={handleInput}
 				onCompositionStart={handleCompositionStart}
 				onCompositionEnd={handleCompositionEnd}
+				onBlur={() => {
+					if (keyboardOpen) {
+						setTimeout(() => hiddenInputRef.current?.focus(), 10)
+					}
+				}}
 				autoComplete="off"
 				autoCorrect="off"
 				autoCapitalize="off"
