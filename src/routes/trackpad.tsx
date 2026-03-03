@@ -19,6 +19,7 @@ function TrackpadPage() {
 	const [buffer, setBuffer] = useState<string[]>([])
 	const bufferText = buffer.join(" + ")
 	const hiddenInputRef = useRef<HTMLInputElement>(null)
+	const isComposingRef = useRef(false)
 	const [keyboardOpen, setKeyboardOpen] = useState(false)
 	const [extraKeysVisible, setExtraKeysVisible] = useState(true)
 
@@ -67,7 +68,18 @@ function TrackpadPage() {
 		setTimeout(() => send({ type: "click", button, press: false }), 50)
 	}
 
+	const handleCopy = () => {
+		send({ type: "copy" })
+	}
+
+	const handlePaste = async () => {
+		send({ type: "paste" })
+	}
+
 	const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+		// During composition (voice/IME), we skip real-time processing
+		if (isComposingRef.current) return
+
 		const nativeEvent = e.nativeEvent as InputEvent
 		const inputType = nativeEvent.inputType
 		const data = nativeEvent.data
@@ -114,6 +126,31 @@ function TrackpadPage() {
 		resetInput()
 	}
 
+	const handleCompositionStart = () => {
+		isComposingRef.current = true
+	}
+
+	const handleCompositionEnd = (e: React.CompositionEvent<HTMLInputElement>) => {
+		isComposingRef.current = false
+		const val = (e.target as HTMLInputElement).value
+		// Extract text by removing the placeholder space if present
+		const textToSend = val.startsWith(" ") ? val.slice(1) : val
+
+		if (textToSend) {
+			if (modifier !== "Release") {
+				handleModifier(textToSend)
+			} else {
+				send({ type: "text", text: textToSend })
+			}
+		}
+
+		// Reset to placeholder
+		if (hiddenInputRef.current) {
+			hiddenInputRef.current.value = " "
+			hiddenInputRef.current.setSelectionRange(1, 1)
+		}
+	}
+
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		const key = e.key.toLowerCase()
 
@@ -150,14 +187,6 @@ function TrackpadPage() {
 		) {
 			send({ type: "key", key })
 		}
-	}
-
-	const handleCopy = () => {
-		send({ type: "copy" })
-	}
-
-	const handlePaste = async () => {
-		send({ type: "paste" })
 	}
 
 	const handleModifierState = () => {
@@ -217,7 +246,7 @@ function TrackpadPage() {
 					onPaste={handlePaste}
 					scrollMode={scrollMode}
 					modifier={modifier}
-					buffer={buffer.join(" + ")}
+					buffer={buffer.join(" + ") || " "}
 					keyboardOpen={keyboardOpen}
 					extraKeysVisible={extraKeysVisible}
 					onToggleScroll={() => setScrollMode(!scrollMode)}
@@ -231,11 +260,10 @@ function TrackpadPage() {
 
 			<div
 				className={`shrink-0 overflow-hidden transition-all duration-300
-                ${
-									!extraKeysVisible || keyboardOpen
-										? "max-h-0 opacity-0 pointer-events-none"
-										: "max-h-[50vh] opacity-100"
-								}`}
+                ${!extraKeysVisible || keyboardOpen
+						? "max-h-0 opacity-0 pointer-events-none"
+						: "max-h-[50vh] opacity-100"
+					}`}
 			>
 				{/* Extra Keys */}
 				<ExtraKeys
@@ -254,6 +282,8 @@ function TrackpadPage() {
 				defaultValue=" "
 				onKeyDown={handleKeyDown}
 				onChange={handleInput}
+				onCompositionStart={handleCompositionStart}
+				onCompositionEnd={handleCompositionEnd}
 				autoComplete="off"
 				autoCorrect="off"
 				autoCapitalize="off"
