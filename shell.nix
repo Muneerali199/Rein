@@ -8,15 +8,17 @@ let
     alsa-lib
     libglvnd
     dbus
-    xorg.libXtst
-    xorg.libX11
-    xorg.libXext
+    fuse
+    libxtst
+    libx11
+    libxext
   ];
 in
 pkgs.mkShell {
-  buildInputs = [
-    pkgs.nodejs_24
-    pkgs.procps
+  buildInputs = with pkgs; [
+    nodejs_24
+    procps
+    appimage-run
   ] ++ sharedLibs;
 
   shellHook = ''
