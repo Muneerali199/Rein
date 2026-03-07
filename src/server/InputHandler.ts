@@ -5,15 +5,15 @@ import os from "node:os"
 
 export interface InputMessage {
 	type:
-	| "move"
-	| "paste"
-	| "copy"
-	| "click"
-	| "scroll"
-	| "key"
-	| "text"
-	| "zoom"
-	| "combo"
+		| "move"
+		| "paste"
+		| "copy"
+		| "click"
+		| "scroll"
+		| "key"
+		| "text"
+		| "zoom"
+		| "combo"
 	dx?: number
 	dy?: number
 	button?: "left" | "right" | "middle"
@@ -163,7 +163,7 @@ export class InputHandler {
 					} catch (err) {
 						console.error("Click event failed:", err)
 						// ensure release just in case
-						await mouse.releaseButton(btn).catch(() => { })
+						await mouse.releaseButton(btn).catch(() => {})
 					}
 				}
 				break
@@ -278,8 +278,10 @@ export class InputHandler {
 					} catch (err) {
 						console.warn("Key press failed:", err)
 						// ensure release just in case
-						if (nutKey !== undefined) await keyboard.releaseKey(nutKey).catch(() => { })
-						if (msg.key === " " || msg.key?.toLowerCase() === "space") await keyboard.releaseKey(KEY_MAP.space).catch(() => { })
+						if (nutKey !== undefined)
+							await keyboard.releaseKey(nutKey).catch(() => {})
+						if (msg.key === " " || msg.key?.toLowerCase() === "space")
+							await keyboard.releaseKey(KEY_MAP.space).catch(() => {})
 					}
 				}
 				break
@@ -328,7 +330,9 @@ export class InputHandler {
 					} catch (err) {
 						console.error("Combo execution failed:", err)
 					} finally {
-						const releasePromises = pressedKeys.reverse().map((k) => keyboard.releaseKey(k))
+						const releasePromises = pressedKeys
+							.reverse()
+							.map((k) => keyboard.releaseKey(k))
 						await Promise.allSettled(releasePromises)
 					}
 
