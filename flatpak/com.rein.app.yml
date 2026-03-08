@@ -11,12 +11,18 @@ separate-locales: false
 
 finish-args:
   - --share=ipc
-  # Use X11/Xwayland by default; Electron Wayland support is still experimental
+  # X11 as default display; use Xwayland when running under a Wayland compositor.
+  # Electron native Wayland support is still experimental.
   - --socket=x11
+  # Wayland socket is included so the XDG Desktop Portal (ScreenCast) is
+  # reachable for getDisplayMedia even in an Xwayland session.
+  - --socket=wayland
   - --socket=pulseaudio
   - --share=network
-  # Required for getDisplayMedia / screen capture
+  # DRI device access required for hardware-accelerated rendering and screen capture
   - --device=dri
+  # Allow the app to talk to the ScreenCast portal for getDisplayMedia
+  - --talk-name=org.freedesktop.portal.ScreenCast
   - --env=ELECTRON_TRASH=gio
   # Proper cursor scaling on HiDPI displays under Wayland
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
@@ -39,8 +45,9 @@ modules:
       # Install npm dependencies (offline, from pre-downloaded cache)
       - npm install --offline
 
-      # Patch package.json to ensure linux target is "dir" (no AppImage fetch)
-      - jq '.build.linux.target="dir"' <<<$(<package.json) > package.json
+      # package.json already contains "linux": { "target": "dir" } so no patch
+      # is needed. The jq line is intentionally omitted: reading and writing the
+      # same file in a single shell redirect would corrupt it.
 
       # Build the Vite/TanStack frontend
       - npm run build

@@ -100,14 +100,23 @@ function createWindow() {
 
 // App start
 app.whenReady().then(async () => {
-  // On macOS, request screen recording permission at startup so the OS
-  // permission dialog is shown before getDisplayMedia is called.
+  // On macOS, screen-recording permission cannot be requested programmatically
+  // via the Electron API (askForMediaAccess does not support 'screen').
+  // If the permission has not been granted yet, show a dialog directing the
+  // user to enable it in System Preferences → Privacy & Security → Screen Recording.
   if (process.platform === 'darwin') {
     const status = systemPreferences.getMediaAccessStatus('screen');
     if (status !== 'granted') {
-      // Trigger the OS permission prompt; the user must grant it in
-      // System Preferences > Privacy & Security > Screen Recording.
-      systemPreferences.askForMediaAccess('camera'); // warms up the permission UI
+      const { dialog } = require('electron');
+      dialog.showMessageBoxSync({
+        type: 'warning',
+        title: 'Screen Recording Permission Required',
+        message: 'Rein needs Screen Recording permission to mirror your display.',
+        detail:
+          'Please open System Preferences → Privacy & Security → Screen Recording ' +
+          'and enable Rein, then restart the app.',
+        buttons: ['OK'],
+      });
     }
   }
 

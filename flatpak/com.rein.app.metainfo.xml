@@ -25,7 +25,15 @@
   <url type="bugtracker">https://github.com/anomalyco/opencode/issues</url>
 
   <releases>
-    <release version="1.0.0" date="2026-03-08"/>
+    <release version="1.0.0" date="2026-03-08">
+      <description>
+        <p>Initial Flatpak release of Rein.</p>
+        <ul>
+          <li>Wireless trackpad, keyboard and screen mirror over local network</li>
+          <li>Fixed screen capture permissions in packaged Electron executables</li>
+        </ul>
+      </description>
+    </release>
   </releases>
 
   <content_rating type="oars-1.1"/>

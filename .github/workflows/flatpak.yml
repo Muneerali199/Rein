@@ -6,6 +6,13 @@ on:
     branches-ignore:
       - main
       - master
+    paths:
+      - "electron/**"
+      - "flatpak/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/flatpak.yml"
   pull_request:
     paths:
       - "src/**"
@@ -32,14 +39,14 @@ jobs:
           node-version: 20
           cache: "npm"
 
-      # Install flatpak-node-generator from the official repo as a package
-      # (the tool is no longer a single .py file — it is a Python package).
-      # It generates generated-sources.json: the offline npm source bundle
-      # consumed by flatpak-builder inside the network-less sandbox.
+      # Install flatpak-node-generator from a pinned commit for reproducibility.
+      # The tool is a Python package (not a single script); pinning to an exact
+      # commit SHA prevents supply-chain surprises from upstream changes.
+      # To update: bump the commit SHA below to the desired upstream commit.
       - name: Install flatpak-node-generator
         run: |
           pip3 install --quiet \
-            "git+https://github.com/flatpak/flatpak-builder-tools.git#subdirectory=node"
+            "git+https://github.com/flatpak/flatpak-builder-tools.git@5de461271d05f43f267b954ac6010b410378ae47#subdirectory=node"
 
       - name: Generate offline npm sources
         run: |
