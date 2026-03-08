@@ -64,6 +64,11 @@ export async function createWsServer(
 
 	logger.info("WebSocket server initialized")
 
+	wss.on("close", () => {
+		inputHandler.cleanup()
+		logger.info("WebSocket server closed, virtual input cleaned up")
+	})
+
 	server.on(
 		"upgrade",
 		(request: IncomingMessage, socket: Socket, head: Buffer) => {

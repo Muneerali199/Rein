@@ -1,6 +1,6 @@
-import { Button, Key, Point, keyboard, mouse } from "@nut-tree-fork/nut-js"
+import { Key, keyboard } from "@nut-tree-fork/nut-js"
 import { KEY_MAP } from "./KeyMap"
-import { moveRelative } from "./ydotool"
+import { createVirtualInput, type VirtualInputDriver } from "./VirtualInput"
 import os from "node:os"
 
 export interface InputMessage {
@@ -33,15 +33,24 @@ export class InputHandler {
 	private scrollTimer: ReturnType<typeof setTimeout> | null = null
 	private throttleMs: number
 	private modifier: Key
+	private vi: VirtualInputDriver
 
 	constructor(throttleMs = 8) {
-		mouse.config.mouseSpeed = 1000
 		this.modifier = os.platform() === "darwin" ? Key.LeftSuper : Key.LeftControl
 		this.throttleMs = throttleMs
+		// Initialise the virtual input driver for this platform.
+		// move / click / scroll bypass NutJS entirely.
+		this.vi = createVirtualInput()
+		this.vi.init()
 	}
 
 	setThrottleMs(ms: number) {
 		this.throttleMs = ms
+	}
+
+	/** Release the virtual input device (call on server shutdown). */
+	cleanup() {
+		this.vi.cleanup()
 	}
 
 	private isFiniteNumber(value: unknown): value is number {
@@ -74,7 +83,7 @@ export class InputHandler {
 			msg.delta = 0
 		}
 
-		// Throttling: Limit high-frequency events (configurable via inputThrottleMs)
+		// Throttling: limit high-frequency events (configurable via inputThrottleMs)
 		if (msg.type === "move") {
 			const now = Date.now()
 			if (now - this.lastMoveTime < this.throttleMs) {
@@ -105,7 +114,7 @@ export class InputHandler {
 							const pending = this.pendingScroll
 							this.pendingScroll = null
 							this.handleMessage(pending).catch((err) => {
-								console.error("Error processing pending move event:", err)
+								console.error("Error processing pending scroll event:", err)
 							})
 						}
 					}, this.throttleMs)
@@ -116,6 +125,7 @@ export class InputHandler {
 		}
 
 		switch (msg.type) {
+			// ── trackpad inputs via VirtualInput (no NutJS) ──────────────────────
 			case "move":
 				if (
 					typeof msg.dx === "number" &&
@@ -124,20 +134,7 @@ export class InputHandler {
 					Number.isFinite(msg.dy)
 				) {
 					try {
-						// Attempt ydotool relative movement first
-						const success = await moveRelative(msg.dx, msg.dy)
-
-						// Fallback to absolute positioning if ydotool is unavailable or fails
-						if (!success) {
-							const currentPos = await mouse.getPosition()
-
-							await mouse.setPosition(
-								new Point(
-									Math.round(currentPos.x + msg.dx),
-									Math.round(currentPos.y + msg.dy),
-								),
-							)
-						}
+						this.vi.moveMouse(Math.round(msg.dx), Math.round(msg.dy))
 					} catch (err) {
 						console.error("Move event failed:", err)
 					}
@@ -145,30 +142,51 @@ export class InputHandler {
 				break
 
 			case "click": {
-				const VALID_BUTTONS = ["left", "right", "middle"]
+				const VALID_BUTTONS = ["left", "right", "middle"] as const
 				if (msg.button && VALID_BUTTONS.includes(msg.button)) {
-					const btn =
-						msg.button === "left"
-							? Button.LEFT
-							: msg.button === "right"
-								? Button.RIGHT
-								: Button.MIDDLE
-
 					try {
-						if (msg.press) {
-							await mouse.pressButton(btn)
+						if (msg.button === "left") {
+							this.vi.leftClick()
+						} else if (msg.button === "right") {
+							this.vi.rightClick()
 						} else {
-							await mouse.releaseButton(btn)
+							this.vi.middleClick()
 						}
 					} catch (err) {
 						console.error("Click event failed:", err)
-						// ensure release just in case
-						await mouse.releaseButton(btn).catch(() => {})
 					}
 				}
 				break
 			}
 
+			case "scroll": {
+				const MAX_SCROLL = 100
+				try {
+					// Vertical
+					if (this.isFiniteNumber(msg.dy) && Math.round(msg.dy) !== 0) {
+						const ticks = this.clamp(
+							Math.round(msg.dy),
+							-MAX_SCROLL,
+							MAX_SCROLL,
+						)
+						this.vi.scrollV(ticks)
+					}
+					// Horizontal
+					if (this.isFiniteNumber(msg.dx) && Math.round(msg.dx) !== 0) {
+						const ticks = this.clamp(
+							Math.round(msg.dx),
+							-MAX_SCROLL,
+							MAX_SCROLL,
+						)
+						this.vi.scrollH(ticks)
+					}
+				} catch (err) {
+					console.error("Scroll event failed:", err)
+				}
+				break
+			}
+
+			// ── keyboard / clipboard — still via NutJS (out of PoC scope) ─────────
 			case "copy": {
 				try {
 					await keyboard.pressKey(this.modifier, Key.C)
@@ -196,41 +214,6 @@ export class InputHandler {
 				break
 			}
 
-			case "scroll": {
-				const MAX_SCROLL = 100
-				const promises: Promise<unknown>[] = []
-
-				// Vertical scroll
-				if (this.isFiniteNumber(msg.dy) && Math.round(msg.dy) !== 0) {
-					const amount = this.clamp(Math.round(msg.dy), -MAX_SCROLL, MAX_SCROLL)
-					if (amount > 0) {
-						promises.push(mouse.scrollDown(amount))
-					} else if (amount < 0) {
-						promises.push(mouse.scrollUp(-amount))
-					}
-				}
-
-				// Horizontal scroll
-				if (this.isFiniteNumber(msg.dx) && Math.round(msg.dx) !== 0) {
-					const amount = this.clamp(Math.round(msg.dx), -MAX_SCROLL, MAX_SCROLL)
-					if (amount > 0) {
-						promises.push(mouse.scrollRight(amount))
-					} else if (amount < 0) {
-						promises.push(mouse.scrollLeft(-amount))
-					}
-				}
-
-				if (promises.length) {
-					const results = await Promise.allSettled(promises)
-					for (const result of results) {
-						if (result.status === "rejected") {
-							console.error("Scroll event failed:", result.reason)
-						}
-					}
-				}
-				break
-			}
-
 			case "zoom":
 				if (this.isFiniteNumber(msg.delta) && msg.delta !== 0) {
 					const sensitivityFactor = 0.5
@@ -245,11 +228,7 @@ export class InputHandler {
 					if (amount !== 0) {
 						await keyboard.pressKey(Key.LeftControl)
 						try {
-							if (amount > 0) {
-								await mouse.scrollDown(amount)
-							} else {
-								await mouse.scrollUp(-amount)
-							}
+							this.vi.scrollV(-amount)
 						} finally {
 							await keyboard.releaseKey(Key.LeftControl)
 						}

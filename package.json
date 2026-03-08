@@ -1,7 +1,7 @@
 {
 	"main": "electron/main.cjs",
 	"name": "app",
-	"version" : "1.0.0",
+	"version": "1.0.0",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -23,6 +23,7 @@
 		"@tanstack/react-router-ssr-query": "^1.131.7",
 		"@tanstack/react-start": "^1.132.0",
 		"@tanstack/router-plugin": "^1.132.0",
+		"koffi": "^2.15.1",
 		"lucide-react": "^0.561.0",
 		"nitro": "npm:nitro-nightly@latest",
 		"qrcode": "^1.5.4",
