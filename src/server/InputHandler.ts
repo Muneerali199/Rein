@@ -60,9 +60,11 @@ export class InputHandler {
 		return Math.max(min, Math.min(max, value))
 	}
 
-	private previousGamepadState: GamepadInputState | null = null
+	// Per-connection previous gamepad state — keyed by socket object reference
+	// so state from one client cannot affect another.
+	private perSocketGamepadState = new Map<object, GamepadInputState>()
 
-	private async handleGamepad(rawState: GamepadInputState) {
+	private async handleGamepad(rawState: GamepadInputState, socket: object) {
 		const DEADZONE = 0.15
 		const MOVEMENT_SCALE = 15
 
@@ -94,8 +96,12 @@ export class InputHandler {
 			return sign * normalized
 		}
 
-		const prev = this.previousGamepadState
-		this.previousGamepadState = state
+		const prev = this.perSocketGamepadState.get(socket) ?? {
+			leftStick: { x: 0, y: 0 },
+			rightStick: { x: 0, y: 0 },
+			buttons: {},
+		}
+		this.perSocketGamepadState.set(socket, state)
 
 		// Use the current deflection (not packet-to-packet delta) so that
 		// holding the stick continuously moves the cursor.
@@ -113,7 +119,7 @@ export class InputHandler {
 			})
 		}
 
-		if (!prev) return
+		// Run button-transition loop using prev (zeroed baseline on first packet)
 
 		const buttonMap: Record<string, string> = {
 			a: "enter",
@@ -140,17 +146,26 @@ export class InputHandler {
 		const ltWasPressed = (prev.buttons?.lt ?? false) as boolean
 		const ltIsPressed = (state.buttons?.lt ?? false) as boolean
 		if (ltIsPressed && !ltWasPressed) {
-			await this.handleMessage({ type: "key", key: "shift" })
+			await this.handleMessage({ type: "key", key: "shift", press: true })
+		} else if (!ltIsPressed && ltWasPressed) {
+			await this.handleMessage({ type: "key", key: "shift", press: false })
 		}
 
 		const rtWasPressed = (prev.buttons?.rt ?? false) as boolean
 		const rtIsPressed = (state.buttons?.rt ?? false) as boolean
 		if (rtIsPressed && !rtWasPressed) {
-			await this.handleMessage({ type: "key", key: "control" })
+			await this.handleMessage({ type: "key", key: "control", press: true })
+		} else if (!rtIsPressed && rtWasPressed) {
+			await this.handleMessage({ type: "key", key: "control", press: false })
 		}
 	}
 
-	async handleMessage(msg: InputMessage) {
+	/** Remove per-connection gamepad state when a socket disconnects. */
+	clearSocketState(socket: object) {
+		this.perSocketGamepadState.delete(socket)
+	}
+
+	async handleMessage(msg: InputMessage, socket?: object) {
 		if (msg.text && typeof msg.text === "string" && msg.text.length > 500) {
 			msg.text = msg.text.substring(0, 500)
 		}
@@ -362,8 +377,17 @@ export class InputHandler {
 
 					try {
 						if (nutKey !== undefined) {
-							await keyboard.pressKey(nutKey)
-							await keyboard.releaseKey(nutKey)
+							if (msg.press === false) {
+								// Release-only (e.g. modifier key-up from gamepad)
+								await keyboard.releaseKey(nutKey)
+							} else if (msg.press === true) {
+								// Press-only (e.g. modifier key-down from gamepad)
+								await keyboard.pressKey(nutKey)
+							} else {
+								// Tap: press + release (default for all existing callers)
+								await keyboard.pressKey(nutKey)
+								await keyboard.releaseKey(nutKey)
+							}
 						} else if (msg.key === " " || msg.key?.toLowerCase() === "space") {
 							const spaceKey = KEY_MAP.space
 							await keyboard.pressKey(spaceKey)
@@ -450,7 +474,7 @@ export class InputHandler {
 
 			case "gamepad":
 				if (msg.state) {
-					await this.handleGamepad(msg.state)
+					await this.handleGamepad(msg.state, socket ?? this)
 				}
 				break
 		}

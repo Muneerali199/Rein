@@ -175,17 +175,20 @@ const GamepadButton = ({
 			}`}
 			onPointerDown={(e) => {
 				e.preventDefault()
+				e.currentTarget.setPointerCapture(e.pointerId)
 				onChange(true)
 			}}
 			onPointerUp={(e) => {
 				e.preventDefault()
-				onChange(false)
-			}}
-			onPointerLeave={(e) => {
-				e.preventDefault()
+				e.currentTarget.releasePointerCapture(e.pointerId)
 				onChange(false)
 			}}
 			onPointerCancel={(e) => {
+				e.preventDefault()
+				e.currentTarget.releasePointerCapture(e.pointerId)
+				onChange(false)
+			}}
+			onLostPointerCapture={(e) => {
 				e.preventDefault()
 				onChange(false)
 			}}
