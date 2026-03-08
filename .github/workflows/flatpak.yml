@@ -32,20 +32,18 @@ jobs:
           node-version: 20
           cache: "npm"
 
-      # Regenerate generated-sources.json from the current package-lock.json.
-      # This step runs on the host (not inside the Flatpak sandbox) and produces
-      # the offline npm source bundle consumed by flatpak-builder.
+      # Install flatpak-node-generator from the official repo as a package
+      # (the tool is no longer a single .py file — it is a Python package).
+      # It generates generated-sources.json: the offline npm source bundle
+      # consumed by flatpak-builder inside the network-less sandbox.
       - name: Install flatpak-node-generator
-        run: pip3 install aiohttp aiofiles
-
-      - name: Download flatpak-node-generator
         run: |
-          curl -sSL https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/node/flatpak-node-generator.py \
-            -o flatpak-node-generator.py
+          pip3 install --quiet \
+            "git+https://github.com/flatpak/flatpak-builder-tools.git#subdirectory=node"
 
       - name: Generate offline npm sources
         run: |
-          python3 flatpak-node-generator.py npm package-lock.json \
+          flatpak-node-generator npm package-lock.json \
             -o flatpak/generated-sources.json
 
       - name: Install Flatpak and flatpak-builder
