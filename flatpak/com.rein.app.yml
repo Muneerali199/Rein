@@ -74,7 +74,7 @@ modules:
       # Install desktop file and icon
       - install -Dm644 flatpak/com.rein.app.desktop \
           /app/share/applications/com.rein.app.desktop
-      - install -Dm644 public/favicon.svg \
+      - install -Dm644 public/app_icon/Icon.svg \
           /app/share/icons/hicolor/scalable/apps/com.rein.app.svg
 
     sources:
