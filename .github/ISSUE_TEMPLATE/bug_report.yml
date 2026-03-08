@@ -54,11 +54,11 @@ body:
       required: true
 
   - type: input
-    id: mobile
+    id: client
     attributes:
-      label: Mobile Device (Client)
-      description: The device/browser used to control (e.g., iPhone 15 Safari, Android Chrome)
-      placeholder: e.g., iPhone 15 Safari, Samsung Galaxy S24 Chrome
+      label: Client OS and browser
+      description: The browser and OS used to control (e.g., iOS 15 Safari, Android 15 Chrome)
+      placeholder: e.g., iOS 15 Safari, Android 15 Chrome
     validations:
       required: true
 
