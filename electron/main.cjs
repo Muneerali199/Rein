@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, session, systemPreferences, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -60,13 +60,38 @@ function createWindow() {
     width: 1200,
     height: 800,
     show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
+
+  const TRUSTED_ORIGIN = 'http://localhost:3000';
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      const origin = webContents.getURL();
+      const isScreenCapture = permission === 'display-capture' || permission === 'screen';
+      callback(origin.startsWith(TRUSTED_ORIGIN) && isScreenCapture);
+    }
+  );
+
+  mainWindow.webContents.session.setPermissionCheckHandler(
+    (webContents, permission) => {
+      const origin = webContents ? webContents.getURL() : '';
+      const isScreenCapture = permission === 'display-capture' || permission === 'screen';
+      return origin.startsWith(TRUSTED_ORIGIN) && isScreenCapture;
+    }
+  );
 
   mainWindow.loadURL('http://localhost:3000');
 
   // Show when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
   });
 
   // Debug only if needed
@@ -77,12 +102,34 @@ function createWindow() {
 
 // App start
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin') {
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    if (status !== 'granted') {
+      dialog.showMessageBoxSync({
+        type: 'warning',
+        title: 'Screen Recording Permission Required',
+        message: 'Rein needs Screen Recording permission to mirror your display.',
+        detail:
+          'Please open System Preferences → Privacy & Security → Screen Recording ' +
+          'and enable Rein, then restart the app.',
+        buttons: ['OK'],
+      });
+    }
+  }
+
   await startServer();
   createWindow();
 });
 
 // Cleanup
 app.on('window-all-closed', () => {
-  if (serverProcess) serverProcess.kill();
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') {
+    if (serverProcess) serverProcess.kill();
+    app.quit();
+  }
+});
+
+// macOS: re-create window when dock icon is clicked
+app.on('activate', () => {
+  if (!mainWindow) createWindow();
 });
