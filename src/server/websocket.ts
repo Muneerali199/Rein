@@ -74,7 +74,7 @@ export async function createWsServer(
 			const token = url.searchParams.get("token")
 			const local = isLocalhost(request)
 
-			logger.info(
+			logger.debug(
 				`Upgrade request received from ${request.socket.remoteAddress}`,
 			)
 
@@ -323,7 +323,7 @@ export async function createWsServer(
 							logger.info("Server configuration updated")
 							ws.send(JSON.stringify({ type: "config-updated", success: true }))
 						} catch (e) {
-							logger.error(`Failed to update config: ${String(e)}`)
+							logger.error("Failed to update config", e)
 							ws.send(
 								JSON.stringify({
 									type: "config-updated",
@@ -353,11 +353,7 @@ export async function createWsServer(
 
 					await inputHandler.handleMessage(msg as InputMessage)
 				} catch (err: unknown) {
-					logger.error(
-						`Error processing message: ${
-							err instanceof Error ? err.message : String(err)
-						}`,
-					)
+					logger.error("Error processing message", err)
 				}
 			})
 
@@ -367,8 +363,7 @@ export async function createWsServer(
 			})
 
 			ws.on("error", (error: Error) => {
-				console.error("WebSocket error:", error)
-				logger.error(`WebSocket error: ${error.message}`)
+				logger.error("WebSocket error", error)
 			})
 		},
 	)

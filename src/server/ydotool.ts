@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import logger from "../utils/logger"
 
 const execFileAsync = promisify(execFile)
 
@@ -30,13 +31,14 @@ export async function checkYdotool(): Promise<boolean> {
 		ydotoolPath = stdout.trim()
 		isYdotoolAvailable = !!ydotoolPath
 		if (isYdotoolAvailable) {
-			console.log(`[ydotool] Found at ${ydotoolPath}`)
+			logger.info(`ydotool found at ${ydotoolPath}`)
 		}
 	} catch (err) {
 		isYdotoolAvailable = false
 		lastFailureTime = now
-		console.warn(
-			"[ydotool] ydotool is not available, falling back to nut.js for cursor movement.",
+		logger.warn(
+			"ydotool is not available, falling back to nut.js for cursor movement",
+			err,
 		)
 	}
 
@@ -66,7 +68,7 @@ export async function moveRelative(dx: number, dy: number): Promise<boolean> {
 		])
 		return true
 	} catch (err) {
-		console.error("[ydotool] Error executing mousemove:", err)
+		logger.error("ydotool mousemove failed", err)
 		// Enter cooldown instead of permanently disabling
 		isYdotoolAvailable = null
 		lastFailureTime = Date.now()
