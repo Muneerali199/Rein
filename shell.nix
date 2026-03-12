@@ -23,10 +23,11 @@ pkgs.mkShell {
 
   shellHook = ''
     export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath sharedLibs}:$LD_LIBRARY_PATH
-    
-    # Alias for starting the application
+    alias g="git"
     npm i
-    npm run electron-dev
+    npm run dist
+    appimage-run ./dist/Rein-1.0.0.AppImage
+    # npm run electron-dev
   '';
 }
 
