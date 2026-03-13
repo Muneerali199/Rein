@@ -9,6 +9,8 @@
 
 A cross-platform, LAN-based remote control for touch-screen devices following the **KISS principle**. It allows touchscreen devices to act as a trackpad and keyboard for a desktop system through a locally served web interface.
 
+> Contributions are welcome! Please leave a star ⭐ to show your support.
+
 ## Tech Stack
 
 *   **Framework**: [TanStack Start](https://tanstack.com/start)
@@ -62,9 +64,6 @@ sudo ufw allow 3000/tcp
 Visit the [Discord Channel](https://discord.com/invite/C8wHmwtczs) for interacting with the community!
 (Go to Project-> Rein)
 
----
-
-> Contributions are welcome! Please leave a star ⭐ to show your support.
 
 ---
 
