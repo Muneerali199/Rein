@@ -8,6 +8,46 @@ export const Route = createFileRoute("/settings")({
 	component: SettingsPage,
 })
 
+// ─── HTTP helpers — replace the raw WebSocket calls that were here before ────
+// Part of PoC for issue #296: one-shot RPC calls should be plain HTTP, not WS.
+
+async function fetchLanIp(): Promise<string | null> {
+	try {
+		const res = await fetch("/api/ip")
+		if (!res.ok) return null
+		const data = (await res.json()) as { ip?: string }
+		return data.ip ?? null
+	} catch {
+		return null
+	}
+}
+
+async function generateToken(): Promise<string | null> {
+	try {
+		const res = await fetch("/api/token", { method: "POST" })
+		if (!res.ok) return null
+		const data = (await res.json()) as { token?: string }
+		return data.token ?? null
+	} catch {
+		return null
+	}
+}
+
+async function saveConfig(config: Record<string, unknown>): Promise<boolean> {
+	try {
+		const res = await fetch("/api/config", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(config),
+		})
+		return res.ok
+	} catch {
+		return false
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function SettingsPage() {
 	const [ip, setIp] = useState("")
 	const [frontendPort, setFrontendPort] = useState(
@@ -49,7 +89,6 @@ function SettingsPage() {
 
 	const [qrData, setQrData] = useState("")
 
-	// Load initial state (IP is not stored in localStorage; only sensitivity, invert, theme are client settings)
 	const [authToken, setAuthToken] = useState(() => {
 		if (typeof window === "undefined") return ""
 		return localStorage.getItem("rein_auth_token") || ""
@@ -70,46 +109,17 @@ function SettingsPage() {
 		setFrontendPort(String(serverConfig.frontendPort))
 	}, [])
 
-	// Auto-generate token on settings page load (localhost only)
+	// Auto-generate token via HTTP POST /api/token (localhost only).
+	// Previously opened a raw WebSocket just for this one-shot call.
 	useEffect(() => {
 		if (typeof window === "undefined") return
-
-		let isMounted = true
-
-		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-		const wsUrl = `${protocol}//${window.location.host}/ws`
-		const socket = new WebSocket(wsUrl)
-
-		socket.onopen = () => {
-			if (socket.readyState === WebSocket.OPEN) {
-				socket.send(JSON.stringify({ type: "generate-token" }))
-			}
-		}
-
-		socket.onmessage = (event) => {
-			try {
-				const data = JSON.parse(event.data)
-				if (data.type === "token-generated" && data.token) {
-					if (isMounted) {
-						setAuthToken(data.token)
-						localStorage.setItem("rein_auth_token", data.token)
-					}
-					socket.close()
-				}
-			} catch (e) {
-				console.error(e)
-			}
-		}
-
-		return () => {
-			isMounted = false
-			if (
-				socket.readyState === WebSocket.OPEN ||
-				socket.readyState === WebSocket.CONNECTING
-			) {
-				socket.close()
-			}
-		}
+		let cancelled = false
+		generateToken().then((token) => {
+			if (cancelled || !token) return
+			setAuthToken(token)
+			try { localStorage.setItem("rein_auth_token", token) } catch { /* ignore */ }
+		})
+		return () => { cancelled = true }
 	}, [])
 
 	// Effect: Update LocalStorage when settings change
@@ -137,34 +147,17 @@ function SettingsPage() {
 			.catch((e) => console.error("QR Error:", e))
 	}, [ip, shareUrl])
 
-	// Effect: Auto-detect LAN IP from Server (only if on localhost)
+	// Auto-detect LAN IP via HTTP GET /api/ip (only if on localhost).
+	// Previously opened a raw WebSocket just for this one-shot call.
 	useEffect(() => {
 		if (typeof window === "undefined") return
 		if (window.location.hostname !== "localhost") return
-
-		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-		const wsUrl = `${protocol}//${window.location.host}/ws`
-		const socket = new WebSocket(wsUrl)
-
-		socket.onopen = () => {
-			socket.send(JSON.stringify({ type: "get-ip" }))
-		}
-
-		socket.onmessage = (event) => {
-			try {
-				const data = JSON.parse(event.data)
-				if (data.type === "server-ip" && data.ip) {
-					setIp(data.ip)
-					socket.close()
-				}
-			} catch (e) {
-				console.error(e)
-			}
-		}
-
-		return () => {
-			if (socket.readyState === WebSocket.OPEN) socket.close()
-		}
+		let cancelled = false
+		fetchLanIp().then((detectedIp) => {
+			if (cancelled || !detectedIp) return
+			setIp(detectedIp)
+		})
+		return () => { cancelled = true }
 	}, [])
 
 	return (
@@ -308,41 +301,21 @@ function SettingsPage() {
 							type="button"
 							className="btn btn-primary w-full rounded-md"
 							disabled={!serverConfigChanged}
-							onClick={() => {
+							onClick={async () => {
 								const port = Number.parseInt(frontendPort, 10)
 								if (!Number.isFinite(port) || port < 1 || port > 65535) {
 									alert("Please enter a valid port number (1–65535).")
 									return
 								}
-
-								const protocol =
-									window.location.protocol === "https:" ? "wss:" : "ws:"
-								const host = window.location.host
-								const wsUrl = `${protocol}//${host}/ws`
-								const socket = new WebSocket(wsUrl)
-
-								socket.onerror = () => {
-									alert("Failed to connect to the server.")
+								// Use HTTP POST /api/config instead of a raw WebSocket.
+								const ok = await saveConfig({ frontendPort: port })
+								if (!ok) {
+									alert("Failed to save config. Is the server running?")
+									return
 								}
-
-								socket.onopen = () => {
-									socket.send(
-										JSON.stringify({
-											type: "update-config",
-											config: {
-												frontendPort: port,
-											},
-										}),
-									)
-
-									setTimeout(() => {
-										socket.close()
-										const newProtocol = window.location.protocol
-										const newHostname = window.location.hostname
-										const newUrl = `${newProtocol}//${newHostname}:${frontendPort}/settings`
-										window.location.href = newUrl
-									}, 1000)
-								}
+								const newProtocol = window.location.protocol
+								const newHostname = window.location.hostname
+								window.location.href = `${newProtocol}//${newHostname}:${frontendPort}/settings`
 							}}
 						>
 							Save Config

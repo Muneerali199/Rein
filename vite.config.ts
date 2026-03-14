@@ -6,6 +6,7 @@ import { nitro } from "nitro/vite"
 import { defineConfig } from "vite"
 import viteTsConfigPaths from "vite-tsconfig-paths"
 import serverConfig from "./src/server-config.json"
+import { createHttpApiMiddleware } from "./src/server/httpApi"
 import { createWsServer } from "./src/server/websocket"
 
 const config = defineConfig({
@@ -17,15 +18,18 @@ const config = defineConfig({
 	},
 	plugins: [
 		{
-			name: "websocket-server",
+			name: "rein-server",
 			async configureServer(server) {
 				const httpServer = server.httpServer
 				if (!httpServer) return
+				// HTTP REST API — must be registered before the WS upgrade handler
+				server.middlewares.use(createHttpApiMiddleware())
 				await createWsServer(httpServer)
 			},
 			async configurePreviewServer(server) {
 				const httpServer = server.httpServer
 				if (!httpServer) return
+				server.middlewares.use(createHttpApiMiddleware())
 				await createWsServer(httpServer)
 			},
 		},
