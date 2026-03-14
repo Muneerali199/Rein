@@ -230,6 +230,12 @@ export async function createWsServer(
 						return
 					}
 
+					if (msg.type === "stop-provider") {
+						;(ws as ExtWebSocket).isProvider = false
+						logger.info("Client unregistered as Screen Provider")
+						return
+					}
+
 					if (msg.type === "update-config") {
 						try {
 							if (
@@ -363,6 +369,8 @@ export async function createWsServer(
 
 			ws.on("close", () => {
 				stopMirror()
+				// Also clear provider flag so frame relay stops on ungraceful disconnect
+				;(ws as ExtWebSocket).isProvider = false
 				logger.info("Client disconnected")
 			})
 
