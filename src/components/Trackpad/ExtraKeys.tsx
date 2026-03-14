@@ -40,7 +40,7 @@ export const ExtraKeys: React.FC<ExtraKeysProps> = ({ sendKey }) => {
 		{ icon: <FaVolumeUp />, key: "audiovolup", type: "media", label: "Vol Up" },
 		{
 			icon: <FaBackward />,
-			key: "audioback",
+			key: "audioprev",
 			type: "media",
 			label: "Backward",
 		},
