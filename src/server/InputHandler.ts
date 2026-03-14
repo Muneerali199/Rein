@@ -60,11 +60,34 @@ export class InputHandler {
 		return Math.max(min, Math.min(max, value))
 	}
 
-	private previousGamepadState: GamepadInputState | null = null
+	// Per-connection previous gamepad state — keyed by socket object reference
+	// so state from one client cannot affect another.
+	private perSocketGamepadState = new Map<object, GamepadInputState>()
 
-	private async handleGamepad(state: GamepadInputState) {
+	private async handleGamepad(rawState: GamepadInputState, socket: object) {
 		const DEADZONE = 0.15
 		const MOVEMENT_SCALE = 15
+
+		// Normalise and validate the incoming payload so malformed packets
+		// cannot cause NaN or thrown errors downstream.
+		const clampAxis = (v: unknown): number => {
+			const n = Number(v)
+			return Number.isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0
+		}
+		const state: GamepadInputState = {
+			leftStick: {
+				x: clampAxis(rawState.leftStick?.x),
+				y: clampAxis(rawState.leftStick?.y),
+			},
+			rightStick: {
+				x: clampAxis(rawState.rightStick?.x),
+				y: clampAxis(rawState.rightStick?.y),
+			},
+			buttons:
+				rawState.buttons && typeof rawState.buttons === "object"
+					? rawState.buttons
+					: {},
+		}
 
 		const applyDeadzone = (value: number): number => {
 			if (Math.abs(value) < DEADZONE) return 0
@@ -73,26 +96,30 @@ export class InputHandler {
 			return sign * normalized
 		}
 
-		const prev = this.previousGamepadState
-		this.previousGamepadState = state
+		const prev = this.perSocketGamepadState.get(socket) ?? {
+			leftStick: { x: 0, y: 0 },
+			rightStick: { x: 0, y: 0 },
+			buttons: {},
+		}
+		this.perSocketGamepadState.set(socket, state)
 
-		if (!prev) return
-
-		const prevLeftX = applyDeadzone(prev.leftStick.x)
-		const prevLeftY = applyDeadzone(prev.leftStick.y)
+		// Use the current deflection (not packet-to-packet delta) so that
+		// holding the stick continuously moves the cursor.
 		const currLeftX = applyDeadzone(state.leftStick.x)
 		const currLeftY = applyDeadzone(state.leftStick.y)
 
-		const deltaX = (currLeftX - prevLeftX) * MOVEMENT_SCALE
-		const deltaY = (currLeftY - prevLeftY) * MOVEMENT_SCALE
+		const deltaX = currLeftX * MOVEMENT_SCALE
+		const deltaY = currLeftY * MOVEMENT_SCALE
 
-		if (Math.abs(deltaX) > 0.1 || Math.abs(deltaY) > 0.1) {
+		if (Math.abs(currLeftX) > 0.1 || Math.abs(currLeftY) > 0.1) {
 			await this.handleMessage({
 				type: "move",
 				dx: Math.round(deltaX),
 				dy: Math.round(deltaY),
 			})
 		}
+
+		// Run button-transition loop using prev (zeroed baseline on first packet)
 
 		const buttonMap: Record<string, string> = {
 			a: "enter",
@@ -108,28 +135,37 @@ export class InputHandler {
 		}
 
 		for (const [btn, key] of Object.entries(buttonMap)) {
-			const wasPressed = prev.buttons[btn] ?? false
-			const isPressed = state.buttons[btn] ?? false
+			const wasPressed = (prev.buttons?.[btn] ?? false) as boolean
+			const isPressed = (state.buttons?.[btn] ?? false) as boolean
 
 			if (isPressed && !wasPressed) {
 				await this.handleMessage({ type: "key", key })
 			}
 		}
 
-		const ltWasPressed = prev.buttons.lt ?? false
-		const ltIsPressed = state.buttons.lt ?? false
+		const ltWasPressed = (prev.buttons?.lt ?? false) as boolean
+		const ltIsPressed = (state.buttons?.lt ?? false) as boolean
 		if (ltIsPressed && !ltWasPressed) {
-			await this.handleMessage({ type: "key", key: "shift" })
+			await this.handleMessage({ type: "key", key: "shift", press: true })
+		} else if (!ltIsPressed && ltWasPressed) {
+			await this.handleMessage({ type: "key", key: "shift", press: false })
 		}
 
-		const rtWasPressed = prev.buttons.rt ?? false
-		const rtIsPressed = state.buttons.rt ?? false
+		const rtWasPressed = (prev.buttons?.rt ?? false) as boolean
+		const rtIsPressed = (state.buttons?.rt ?? false) as boolean
 		if (rtIsPressed && !rtWasPressed) {
-			await this.handleMessage({ type: "key", key: "control" })
+			await this.handleMessage({ type: "key", key: "control", press: true })
+		} else if (!rtIsPressed && rtWasPressed) {
+			await this.handleMessage({ type: "key", key: "control", press: false })
 		}
 	}
 
-	async handleMessage(msg: InputMessage) {
+	/** Remove per-connection gamepad state when a socket disconnects. */
+	clearSocketState(socket: object) {
+		this.perSocketGamepadState.delete(socket)
+	}
+
+	async handleMessage(msg: InputMessage, socket?: object) {
 		if (msg.text && typeof msg.text === "string" && msg.text.length > 500) {
 			msg.text = msg.text.substring(0, 500)
 		}
@@ -341,8 +377,17 @@ export class InputHandler {
 
 					try {
 						if (nutKey !== undefined) {
-							await keyboard.pressKey(nutKey)
-							await keyboard.releaseKey(nutKey)
+							if (msg.press === false) {
+								// Release-only (e.g. modifier key-up from gamepad)
+								await keyboard.releaseKey(nutKey)
+							} else if (msg.press === true) {
+								// Press-only (e.g. modifier key-down from gamepad)
+								await keyboard.pressKey(nutKey)
+							} else {
+								// Tap: press + release (default for all existing callers)
+								await keyboard.pressKey(nutKey)
+								await keyboard.releaseKey(nutKey)
+							}
 						} else if (msg.key === " " || msg.key?.toLowerCase() === "space") {
 							const spaceKey = KEY_MAP.space
 							await keyboard.pressKey(spaceKey)
@@ -429,7 +474,7 @@ export class InputHandler {
 
 			case "gamepad":
 				if (msg.state) {
-					await this.handleGamepad(msg.state)
+					await this.handleGamepad(msg.state, socket ?? this)
 				}
 				break
 		}

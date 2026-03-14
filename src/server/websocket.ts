@@ -335,7 +335,7 @@ export async function createWsServer(
 						return
 					}
 
-				const VALID_INPUT_TYPES = [
+					const VALID_INPUT_TYPES = [
 						"move",
 						"click",
 						"scroll",
@@ -352,7 +352,7 @@ export async function createWsServer(
 						return
 					}
 
-					await inputHandler.handleMessage(msg as InputMessage)
+					await inputHandler.handleMessage(msg as InputMessage, ws)
 				} catch (err: unknown) {
 					logger.error(
 						`Error processing message: ${
@@ -364,6 +364,7 @@ export async function createWsServer(
 
 			ws.on("close", () => {
 				stopMirror()
+				inputHandler.clearSocketState(ws)
 				logger.info("Client disconnected")
 			})
 
