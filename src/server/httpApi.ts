@@ -5,25 +5,28 @@
  *
  * Endpoints registered in vite.config.ts via server.middlewares.use():
  *
+ *   OPTIONS /api/*           → CORS preflight (200)
  *   GET  /api/ip             → { ip: string }
  *   POST /api/token          → { token: string }        (localhost only)
  *   POST /api/config         → { ok: true }             (localhost only)
  *
  * WebRTC signalling (used by useWebRTCProvider + useWebRTCMirror):
- *   POST /api/signal         → { sessionId, answer?, candidates? }
- *   GET  /api/signal/:id     → { offer, candidates }
- *   POST /api/signal/:id/ice → { ok: true }
- *   DELETE /api/signal/:id   → { ok: true }
+ *   POST   /api/signal             → { sessionId }
+ *   GET    /api/signal/:id         → { offer, ice }  or long-poll for answer
+ *   POST   /api/signal/:id/answer  → { ok: true }
+ *   POST   /api/signal/:id/ice     → { ok: true }
+ *   DELETE /api/signal/:id         → { ok: true }
  */
 import fs from "node:fs"
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { generateToken, getActiveToken, isKnownToken, storeToken } from "./tokenStore"
+import { generateToken, getActiveToken, isKnownToken, storeToken, touchToken } from "./tokenStore"
 import { getLocalIp } from "./getLocalIp"
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function isLocalhost(req: IncomingMessage): boolean {
 	const addr = req.socket.remoteAddress
+	if (!addr) return false
 	return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"
 }
 
@@ -45,12 +48,20 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 	})
 }
 
+// CORS headers added to every /api response so browser fetch() works
+// cross-origin (e.g. phone on same LAN accessing the desktop's IP).
+const CORS_HEADERS = {
+	"Access-Control-Allow-Origin": "*",
+	"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+	"Access-Control-Allow-Headers": "Content-Type",
+}
+
 function json(res: ServerResponse, status: number, data: unknown) {
 	const body = JSON.stringify(data)
 	res.writeHead(status, {
 		"Content-Type": "application/json",
 		"Content-Length": Buffer.byteLength(body),
-		"Access-Control-Allow-Origin": "*",
+		...CORS_HEADERS,
 	})
 	res.end(body)
 }
@@ -66,16 +77,16 @@ function unauthorized(res: ServerResponse) {
 // The viewer (phone) retrieves the offer via GET and posts back an SDP answer.
 // ICE candidates are exchanged via POST /api/signal/:id/ice (trickle ICE).
 //
-// Long-poll pattern: GET /api/signal/:id holds the request open for up to
-// POLL_TIMEOUT_MS waiting for the answer.  This avoids polling loops on the
-// provider side.
+// Long-poll pattern: GET /api/signal/:id?role=provider holds the request open
+// for up to POLL_TIMEOUT_MS waiting for the answer.  To avoid a TOCTOU race
+// (answer arriving between the `if (!session.answer)` check and registering
+// the waiter) we register the waiter first, then re-check inside the promise.
 
 const POLL_TIMEOUT_MS = 15_000
 const SESSION_TTL_MS  = 60_000
 
 // SDP / ICE shapes — plain JSON objects passed through opaquely.
-// We define local interfaces to avoid conflicts with browser DOM globals that
-// are not available in the Node.js server context.
+// Local interfaces avoid depending on browser DOM globals unavailable in Node.
 interface SdpInit {
 	type: string
 	sdp?: string
@@ -89,18 +100,18 @@ interface IceCandidateInit {
 interface SignalSession {
 	offer:        SdpInit
 	answer:       SdpInit | null
-	// ICE candidates accumulated from the provider (desktop → viewer)
+	/** ICE candidates accumulated from the provider (desktop → viewer) */
 	providerIce:  IceCandidateInit[]
-	// ICE candidates accumulated from the viewer (phone → provider)
+	/** ICE candidates accumulated from the viewer (phone → provider) */
 	viewerIce:    IceCandidateInit[]
-	// Resolve fn of a waiting long-poll request (provider side)
-	answerWaiter: ((answer: SdpInit) => void) | null
+	/** Resolve fn of the active long-poll (provider side), if any */
+	answerWaiter: (() => void) | null
 	createdAt:    number
 }
 
 const sessions = new Map<string, SignalSession>()
 
-// Prune sessions older than SESSION_TTL_MS
+/** Prune sessions older than SESSION_TTL_MS to prevent unbounded growth. */
 function pruneSessions() {
 	const now = Date.now()
 	for (const [id, s] of sessions) {
@@ -123,6 +134,21 @@ export function createHttpApiMiddleware() {
 		const url = new URL(req.url ?? "/", `http://${req.headers.host}`)
 		const path = url.pathname
 
+		// Only handle /api/* routes
+		if (!path.startsWith("/api/")) {
+			next()
+			return
+		}
+
+		// ── OPTIONS preflight (CORS) ───────────────────────────────────────────
+		// Browsers send a preflight OPTIONS request before cross-origin POSTs.
+		// Without this, all cross-origin fetch() calls will fail in the browser.
+		if (req.method === "OPTIONS") {
+			res.writeHead(204, CORS_HEADERS)
+			res.end()
+			return
+		}
+
 		// ── GET /api/ip ────────────────────────────────────────────────────────
 		if (req.method === "GET" && path === "/api/ip") {
 			if (!cachedIp) cachedIp = await getLocalIp()
@@ -137,6 +163,9 @@ export function createHttpApiMiddleware() {
 			if (!token) {
 				token = generateToken()
 				storeToken(token)
+			} else {
+				// Refresh lastUsed so the token doesn't expire while in active use
+				touchToken(token)
 			}
 			return json(res, 200, { token })
 		}
@@ -151,10 +180,16 @@ export function createHttpApiMiddleware() {
 				const filtered: Record<string, unknown> = {}
 				for (const key of ALLOWED_KEYS) {
 					if (!(key in body)) continue
-					if (key === "frontendPort" || key === "inputThrottleMs") {
+					if (key === "frontendPort") {
 						const n = Number(body[key])
-						if (!Number.isFinite(n) || n < 1) {
-							return json(res, 400, { error: `Invalid value for ${key}` })
+						if (!Number.isFinite(n) || n < 1 || n > 65535) {
+							return json(res, 400, { error: "Invalid value for frontendPort (must be 1–65535)" })
+						}
+						filtered[key] = Math.floor(n)
+					} else if (key === "inputThrottleMs") {
+						const n = Number(body[key])
+						if (!Number.isFinite(n) || n < 1 || n > 1000) {
+							return json(res, 400, { error: "Invalid value for inputThrottleMs (must be 1–1000)" })
 						}
 						filtered[key] = Math.floor(n)
 					} else if (typeof body[key] === "string" && (body[key] as string).length <= 255) {
@@ -179,7 +214,6 @@ export function createHttpApiMiddleware() {
 		// Provider posts an SDP offer to create a new signalling session.
 		// Returns a sessionId the viewer uses to retrieve the offer.
 		if (req.method === "POST" && path === "/api/signal") {
-			// Auth: require a valid token for remote callers
 			const token = url.searchParams.get("token")
 			if (!isLocalhost(req) && (!token || !isKnownToken(token))) {
 				return unauthorized(res)
@@ -202,7 +236,8 @@ export function createHttpApiMiddleware() {
 		}
 
 		// ── GET /api/signal/:id ────────────────────────────────────────────────
-		// Viewer polls for the offer.  Provider long-polls for the answer.
+		// Viewer: returns offer + provider ICE candidates immediately.
+		// Provider: long-polls (up to POLL_TIMEOUT_MS) for the SDP answer.
 		const signalGetMatch = path.match(/^\/api\/signal\/([^/]+)$/)
 		if (req.method === "GET" && signalGetMatch) {
 			const sessionId = signalGetMatch[1]
@@ -213,24 +248,26 @@ export function createHttpApiMiddleware() {
 			const session = sessions.get(sessionId)
 			if (!session) return json(res, 404, { error: "Session not found" })
 
-			const role = url.searchParams.get("role") // "viewer" or "provider"
+			const role = url.searchParams.get("role")
 
 			if (role === "provider") {
-				// Provider is waiting for the viewer's answer (long-poll)
-				if (session.answer) {
-					return json(res, 200, { answer: session.answer, ice: session.viewerIce })
-				}
-				// Hold the request open
+				// Register the waiter BEFORE checking session.answer to eliminate
+				// the TOCTOU race where the answer arrives between the check and
+				// the Promise constructor.
 				await new Promise<void>((resolve) => {
+					if (session.answer) {
+						// Answer already arrived — resolve immediately
+						resolve()
+						return
+					}
 					const timeout = setTimeout(() => {
 						session.answerWaiter = null
 						resolve()
 					}, POLL_TIMEOUT_MS)
-					session.answerWaiter = (_answer) => {
+					session.answerWaiter = () => {
 						clearTimeout(timeout)
 						session.answerWaiter = null
 						resolve()
-						// answer is already stored by the POST /api/signal/:id/answer handler
 					}
 				})
 				if (session.answer) {
@@ -239,12 +276,12 @@ export function createHttpApiMiddleware() {
 				return json(res, 408, { error: "Timeout waiting for answer" })
 			}
 
-			// Viewer: just return the offer + any provider ICE candidates
+			// Viewer: return offer + any provider ICE candidates
 			return json(res, 200, { offer: session.offer, ice: session.providerIce })
 		}
 
 		// ── POST /api/signal/:id/answer ────────────────────────────────────────
-		// Viewer posts its SDP answer.
+		// Viewer posts its SDP answer; wakes the provider long-poll.
 		const signalAnswerMatch = path.match(/^\/api\/signal\/([^/]+)\/answer$/)
 		if (req.method === "POST" && signalAnswerMatch) {
 			const sessionId = signalAnswerMatch[1]
@@ -258,15 +295,16 @@ export function createHttpApiMiddleware() {
 			if (!body.answer?.type || !body.answer?.sdp) {
 				return json(res, 400, { error: "Missing answer" })
 			}
+			// Store the answer first, then wake the waiter — guarantees the
+			// provider long-poll always reads a non-null answer after waking.
 			session.answer = body.answer
-			// Wake up the waiting provider long-poll if any
-			if (session.answerWaiter) session.answerWaiter(body.answer)
+			session.answerWaiter?.()
 			return json(res, 200, { ok: true })
 		}
 
 		// ── POST /api/signal/:id/ice ───────────────────────────────────────────
 		// Either side trickles ICE candidates.
-		// Query param `role=provider` or `role=viewer` identifies the sender.
+		// Body: { candidate: IceCandidateInit, role: "provider" | "viewer" }
 		const signalIceMatch = path.match(/^\/api\/signal\/([^/]+)\/ice$/)
 		if (req.method === "POST" && signalIceMatch) {
 			const sessionId = signalIceMatch[1]
@@ -289,11 +327,14 @@ export function createHttpApiMiddleware() {
 		// ── DELETE /api/signal/:id ─────────────────────────────────────────────
 		const signalDeleteMatch = path.match(/^\/api\/signal\/([^/]+)$/)
 		if (req.method === "DELETE" && signalDeleteMatch) {
+			const session = sessions.get(signalDeleteMatch[1])
+			// Wake any waiting long-poll so it doesn't hang until timeout
+			if (session?.answerWaiter) session.answerWaiter()
 			sessions.delete(signalDeleteMatch[1])
 			return json(res, 200, { ok: true })
 		}
 
-		// Not an API route — pass through to Vite / Nitro
-		next()
+		// Unknown /api/* route
+		return json(res, 404, { error: "Not found" })
 	}
 }

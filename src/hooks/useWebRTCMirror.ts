@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 export interface WebRTCMirrorState {
-	/** true once the first video frame arrives */
+	/** true once the first video track arrives */
 	hasStream: boolean
 	/** The live MediaStream, attach to <video>.srcObject */
 	stream: MediaStream | null
@@ -70,8 +70,10 @@ export function useWebRTCMirror({
 	const [stream, setStream] = useState<MediaStream | null>(null)
 	const [dataChannelOpen, setDataChannelOpen] = useState(false)
 
-	const pcRef = useRef<RTCPeerConnection | null>(null)
-	const dcRef = useRef<RTCDataChannel | null>(null)
+	const pcRef  = useRef<RTCPeerConnection | null>(null)
+	const dcRef  = useRef<RTCDataChannel | null>(null)
+	// Track mounted state to avoid setState on unmounted component
+	const mountedRef = useRef(true)
 
 	const sendInput = useCallback(
 		(msg: unknown) => {
@@ -86,34 +88,38 @@ export function useWebRTCMirror({
 	)
 
 	useEffect(() => {
+		mountedRef.current = true
 		if (!sessionId) return
 
-		let cancelled = false
+		const abortCtrl = new AbortController()
+		const { signal } = abortCtrl
+
 		const pc = new RTCPeerConnection({ iceServers: [] })
 		pcRef.current = pc
 
-		// ── DataChannel for input events (provider creates it implicitly) ─────
+		// ── DataChannel for input events ──────────────────────────────────────
 		pc.ondatachannel = (event) => {
 			const dc = event.channel
 			dcRef.current = dc
-			dc.onopen  = () => { if (!cancelled) setDataChannelOpen(true)  }
-			dc.onclose = () => { if (!cancelled) setDataChannelOpen(false) }
+			dc.onopen  = () => { if (mountedRef.current) setDataChannelOpen(true)  }
+			dc.onclose = () => { if (mountedRef.current) setDataChannelOpen(false) }
 		}
 
 		// ── Incoming video track → attach to state ────────────────────────────
 		pc.ontrack = (event) => {
-			if (cancelled) return
+			if (!mountedRef.current) return
 			const ms = event.streams[0] ?? new MediaStream([event.track])
 			setStream(ms)
 			setHasStream(true)
 		}
 
 		// ── Trickle ICE from viewer to provider ───────────────────────────────
-		pc.onicecandidate = async ({ candidate }) => {
-			if (!candidate || cancelled) return
-			await apiFetch(`/api/signal/${sessionId}/ice${tokenSuffix("?")}`, {
+		pc.onicecandidate = ({ candidate }) => {
+			if (!candidate || signal.aborted) return
+			apiFetch(`/api/signal/${sessionId}/ice${tokenSuffix("?")}`, {
 				method: "POST",
 				body: JSON.stringify({ candidate, role: "viewer" }),
+				signal,
 			}).catch(() => {})
 		}
 
@@ -122,8 +128,9 @@ export function useWebRTCMirror({
 				// 1. Fetch the offer + any provider ICE candidates
 				const offerRes = await apiFetch(
 					`/api/signal/${sessionId}?role=viewer${tokenSuffix("&")}`,
+					{ signal },
 				)
-				if (!offerRes.ok || cancelled) return
+				if (!offerRes.ok || signal.aborted) return
 				const { offer, ice: providerIce } = (await offerRes.json()) as {
 					offer: RTCSessionDescriptionInit
 					ice: RTCIceCandidateInit[]
@@ -131,15 +138,18 @@ export function useWebRTCMirror({
 
 				// 2. Apply offer
 				await pc.setRemoteDescription(new RTCSessionDescription(offer))
+				if (signal.aborted) return
 
 				// 3. Create and apply answer
 				const answer = await pc.createAnswer()
 				await pc.setLocalDescription(answer)
+				if (signal.aborted) return
 
 				// 4. Post answer to signalling server
 				await apiFetch(`/api/signal/${sessionId}/answer${tokenSuffix("?")}`, {
 					method: "POST",
 					body: JSON.stringify({ answer }),
+					signal,
 				})
 
 				// 5. Apply any ICE candidates that arrived before the answer
@@ -147,18 +157,28 @@ export function useWebRTCMirror({
 					await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})
 				}
 			} catch (e) {
-				if (!cancelled) console.error("[WebRTC mirror] setup failed:", e)
+				// AbortError is expected on cleanup — suppress it
+				if (e instanceof Error && e.name === "AbortError") return
+				if (mountedRef.current) console.error("[WebRTC mirror] setup failed:", e)
 			}
 		})()
 
 		return () => {
-			cancelled = true
+			mountedRef.current = false
+			abortCtrl.abort()
 			if (dcRef.current) {
 				dcRef.current.close()
 				dcRef.current = null
 			}
 			pc.close()
 			pcRef.current = null
+		}
+	}, [sessionId])
+
+	// Reset state when sessionId changes or on unmount
+	useEffect(() => {
+		return () => {
+			mountedRef.current = false
 			setHasStream(false)
 			setStream(null)
 			setDataChannelOpen(false)

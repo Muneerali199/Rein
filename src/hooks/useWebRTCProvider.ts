@@ -11,11 +11,12 @@
  *
  * Flow:
  *   1. getDisplayMedia() → MediaStream
- *   2. POST /api/signal  → sessionId  (SDP offer)
- *   3. Long-poll GET /api/signal/:id?role=provider → SDP answer + ICE
- *   4. setRemoteDescription(answer) + add ICE candidates
- *   5. Trickle own ICE candidates via POST /api/signal/:id/ice
- *   6. P2P video flows directly to the viewer — server never touches frames
+ *   2. pc.createDataChannel("input") — must be before createOffer so SDP includes it
+ *   3. POST /api/signal  → sessionId  (SDP offer)
+ *   4. Long-poll GET /api/signal/:id?role=provider → SDP answer + ICE
+ *   5. setRemoteDescription(answer) + add ICE candidates
+ *   6. Trickle own ICE candidates via POST /api/signal/:id/ice
+ *   7. P2P video flows directly to the viewer — server never touches frames
  *
  * Benefits over canvas pipeline:
  *   - Hardware H.264/VP9/AV1 encoding (browser codec stack)
@@ -33,9 +34,19 @@ function getToken(): string {
 	}
 }
 
+/** Returns "?token=…" if a token exists, otherwise "". */
 function tokenParam(): string {
 	const t = getToken()
 	return t ? `?token=${encodeURIComponent(t)}` : ""
+}
+
+/**
+ * Appends a token param to a URL that already has a query string.
+ * e.g. appendToken("/api/signal/id?role=provider") → "…&token=xxx"
+ */
+function appendToken(url: string): string {
+	const t = getToken()
+	return t ? `${url}&token=${encodeURIComponent(t)}` : url
 }
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -47,8 +58,8 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
 
 export function useWebRTCProvider() {
 	const [isSharing, setIsSharing] = useState(false)
-	const pcRef     = useRef<RTCPeerConnection | null>(null)
-	const streamRef = useRef<MediaStream | null>(null)
+	const pcRef        = useRef<RTCPeerConnection | null>(null)
+	const streamRef    = useRef<MediaStream | null>(null)
 	const sessionIdRef = useRef<string | null>(null)
 
 	const stopSharing = useCallback(async () => {
@@ -61,7 +72,7 @@ export function useWebRTCProvider() {
 			pcRef.current = null
 		}
 		if (sessionIdRef.current) {
-			// Best-effort cleanup — viewer will time-out otherwise
+			// Best-effort cleanup — wake the long-poll and remove the session
 			await apiFetch(`/api/signal/${sessionIdRef.current}${tokenParam()}`, {
 				method: "DELETE",
 			}).catch(() => {})
@@ -79,19 +90,31 @@ export function useWebRTCProvider() {
 			})
 			streamRef.current = stream
 
+			const videoTracks = stream.getVideoTracks()
+			if (videoTracks.length === 0) {
+				// No video track returned — clean up and bail
+				stream.getTracks().forEach((t) => t.stop())
+				return false
+			}
+
 			// 2. Create RTCPeerConnection (no STUN/TURN needed for LAN)
 			const pc = new RTCPeerConnection({ iceServers: [] })
 			pcRef.current = pc
 
-			// Add all video tracks to the peer connection
-			for (const track of stream.getVideoTracks()) {
+			// Create the input DataChannel BEFORE createOffer() so the SDP
+			// includes a data section — otherwise ondatachannel never fires on
+			// the viewer side.
+			pc.createDataChannel("input", { ordered: false, maxRetransmits: 0 })
+
+			// Add video tracks to the peer connection
+			for (const track of videoTracks) {
 				pc.addTrack(track, stream)
 			}
 
 			// Trickle ICE candidates to the signalling server
-			pc.onicecandidate = async ({ candidate }) => {
+			pc.onicecandidate = ({ candidate }) => {
 				if (!candidate || !sessionIdRef.current) return
-				await apiFetch(
+				apiFetch(
 					`/api/signal/${sessionIdRef.current}/ice${tokenParam()}`,
 					{
 						method: "POST",
@@ -101,7 +124,7 @@ export function useWebRTCProvider() {
 			}
 
 			// Handle stream end (user clicks browser "Stop Sharing")
-			stream.getVideoTracks()[0].onended = () => {
+			videoTracks[0].onended = () => {
 				stopSharing()
 			}
 
@@ -120,13 +143,11 @@ export function useWebRTCProvider() {
 
 			setIsSharing(true)
 
-			// 5. Long-poll for the viewer's answer
-			// This runs in the background — provider is already "sharing" by now.
+			// 5. Long-poll for the viewer's answer (background task)
 			;(async () => {
 				try {
-					const answerRes = await apiFetch(
-						`/api/signal/${sessionId}?role=provider${tokenParam() ? `&token=${getToken()}` : ""}`,
-					)
+					const pollUrl = appendToken(`/api/signal/${sessionId}?role=provider`)
+					const answerRes = await apiFetch(pollUrl)
 					if (!answerRes.ok) return
 					const { answer, ice } = (await answerRes.json()) as {
 						answer: RTCSessionDescriptionInit
