@@ -78,6 +78,14 @@ export function ConnectionProvider({
 			} catch (e) {
 				// Failed to store
 			}
+			// Remove token from URL to prevent it persisting in browser history
+			try {
+				const cleanUrl = new URL(window.location.href)
+				cleanUrl.searchParams.delete("token")
+				window.history.replaceState(null, "", cleanUrl.toString())
+			} catch (e) {
+				// Best-effort
+			}
 		}
 
 		let wsUrl = `${protocol}//${host}/ws`
