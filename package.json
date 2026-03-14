@@ -1,7 +1,7 @@
 {
 	"main": "electron/main.cjs",
 	"name": "app",
-	"version" : "1.0.0",
+	"version": "1.0.0",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -82,13 +82,14 @@
 			"package.json"
 		],
 		"npmRebuild": true,
-		"win": {
-			"target": "nsis"
+		"linux": {
+			"target": "AppImage"
 		},
-		"nsis": {
-			"oneClick": false,
-			"allowToChangeInstallationDirectory": true,
-			"createDesktopShortcut": true
+		"win": {
+			"target": "portable"
+		},
+		"mac": {
+			"target": "dmg"
 		}
 	}
 }

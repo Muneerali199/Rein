@@ -2,9 +2,23 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const fs = require('fs');
 
 let mainWindow;
 let serverProcess;
+let serverHost = '0.0.0.0';
+let serverPort = 3000;
+
+try {
+  const configPath = './src/server-config.json';
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (config.host) serverHost = config.host;
+    if (config.frontendPort) serverPort = config.frontendPort;
+  }
+} catch (e) {
+  console.warn('Failed to load server config:', e);
+}
 
 // Prevent multiple instances
 const gotLock = app.requestSingleInstanceLock();
@@ -43,12 +57,12 @@ function startServer() {
       windowsHide: true,     // hide CMD
       env: {
         ...process.env,
-        HOST: '127.0.0.1',
-        PORT: '3000',
+        HOST: serverHost,
+        PORT: serverPort.toString(),
       },
     });
 
-    waitForServer('http://localhost:3000').then(resolve);
+    waitForServer(`http://localhost:${serverPort}`).then(resolve);
   });
 }
 
@@ -62,7 +76,7 @@ function createWindow() {
     show: false,
   });
 
-  mainWindow.loadURL('http://localhost:3000');
+  mainWindow.loadURL(`http://localhost:${serverPort}`);
 
   // Show when ready
   mainWindow.once('ready-to-show', () => {
