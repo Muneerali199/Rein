@@ -14,6 +14,7 @@ import {
 	FaBackward,
 	FaForward,
 } from "react-icons/fa"
+import { FaBackwardStep, FaForwardStep } from "react-icons/fa6"
 import { MdSpaceBar } from "react-icons/md"
 
 interface ExtraKeysProps {
@@ -39,10 +40,10 @@ export const ExtraKeys: React.FC<ExtraKeysProps> = ({ sendKey }) => {
 		},
 		{ icon: <FaVolumeUp />, key: "audiovolup", type: "media", label: "Vol Up" },
 		{
-			icon: <FaBackward />,
-			key: "audioback",
+			icon: <FaBackwardStep />,
+			key: "audioprev",
 			type: "media",
-			label: "Backward",
+			label: "Previous",
 		},
 		{
 			icon: isPlaying ? <FaPause /> : <FaPlay />,
@@ -52,10 +53,10 @@ export const ExtraKeys: React.FC<ExtraKeysProps> = ({ sendKey }) => {
 			label: "Play/Pause",
 		},
 		{
-			icon: <FaForward />,
-			key: "audioforward",
+			icon: <FaForwardStep />,
+			key: "audionext",
 			type: "media",
-			label: "Forward",
+			label: "Next",
 		},
 
 		{ label: "Esc", key: "escape", type: "action" },
