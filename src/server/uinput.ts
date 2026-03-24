@@ -1,9 +1,5 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import * as fs from "node:fs/promises"
 import * as fsSync from "node:fs"
-
-const execFileAsync = promisify(execFile)
 
 const UINPUT_PATH = "/dev/uinput"
 
