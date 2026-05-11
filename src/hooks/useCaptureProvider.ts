@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 export function useCaptureProvider(wsRef: React.RefObject<WebSocket | null>) {
 	const [isSharing, setIsSharing] = useState(false)
@@ -9,7 +9,7 @@ export function useCaptureProvider(wsRef: React.RefObject<WebSocket | null>) {
 	const streamRef = useRef<MediaStream | null>(null)
 	const timerRef = useRef<number | null>(null)
 
-	const stopSharing = useCallback(() => {
+	const stopSharing = () => {
 		if (timerRef.current) {
 			clearInterval(timerRef.current)
 			timerRef.current = null
@@ -26,9 +26,9 @@ export function useCaptureProvider(wsRef: React.RefObject<WebSocket | null>) {
 			wsRef.current.send(JSON.stringify({ type: "stop-mirror" }))
 		}
 		setIsSharing(false)
-	}, [wsRef])
+	}
 
-	const captureFrame = useCallback(() => {
+	const captureFrame = () => {
 		if (!videoRef.current || !canvasRef.current || !wsRef.current) return
 		if (wsRef.current.readyState !== WebSocket.OPEN) return
 
@@ -72,9 +72,9 @@ export function useCaptureProvider(wsRef: React.RefObject<WebSocket | null>) {
 			format,
 			quality,
 		)
-	}, [wsRef])
+	}
 
-	const startSharing = useCallback(async () => {
+	const startSharing = async () => {
 		try {
 			const stream = await navigator.mediaDevices.getDisplayMedia({
 				video: {
@@ -117,7 +117,7 @@ export function useCaptureProvider(wsRef: React.RefObject<WebSocket | null>) {
 			console.error("Failed to start screen capture:", err)
 			setIsSharing(false)
 		}
-	}, [wsRef, captureFrame, stopSharing])
+	}
 
 	useEffect(() => {
 		return () => {
